@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>회장님, 한 잔 받으십쇼!</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/galmuri/dist/galmuri.css">
+<style>
+  :root { --bg:#120c1c; --ink:#fff6e0; --accent:#ffcf3f; --red:#ff3355; --green:#3fd27a; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:'Galmuri11','Galmuri9',monospace; -webkit-user-select:none; user-select:none;
+    -webkit-touch-callout:none; overflow:hidden; }
+  body { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; }
+  #hud { width:var(--w); display:flex; justify-content:space-between; align-items:center; font-size:14px; padding:0 4px; }
+  #hud .rank { color:var(--accent); }
+  #wrap { --w:min(96vw, calc(84vh * 0.75)); position:relative; width:var(--w); aspect-ratio:3/4;
+    border:4px solid #000; box-shadow:0 0 0 4px #4b3566, 0 10px 0 4px #000; }
+  #game { width:100%; height:100%; display:block; image-rendering:pixelated; image-rendering:crisp-edges; touch-action:none; cursor:pointer; }
+  #hint { width:var(--w); text-align:center; font-size:13px; opacity:.8; min-height:1.2em; }
+  #overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:10px; text-align:center; background:rgba(10,6,18,.78); padding:16px; }
+  #overlay.hidden { display:none; }
+  .big { font-size:clamp(26px,8vw,40px); color:var(--accent); text-shadow:3px 3px 0 #000, -1px -1px 0 #000; letter-spacing:2px; }
+  .mid { font-size:clamp(16px,4.5vw,20px); }
+  .small { font-size:13px; opacity:.85; line-height:1.6; }
+  .red { color:var(--red); } .accent { color:var(--accent); } .green { color:var(--green); }
+  .quote { background:#fff6e0; color:#1a1020; padding:8px 12px; border:3px solid #000; position:relative; font-size:14px; max-width:90%; }
+  .quote:after { content:''; position:absolute; left:20px; bottom:-11px; border:8px solid transparent; border-top-color:#000; }
+  button { font-family:inherit; font-size:16px; color:#1a1020; background:var(--accent); border:3px solid #000;
+    box-shadow:0 4px 0 #000; padding:8px 18px; cursor:pointer; margin-top:6px; }
+  button.sub { background:#fff6e0; font-size:14px; padding:6px 12px; }
+  .btns { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  button:active { transform:translateY(3px); box-shadow:0 1px 0 #000; }
+  .stars { color:var(--red); letter-spacing:2px; }
+  .blink { animation:blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+</style>
+</head>
+<body>
+<div id="hud" style="--w:min(96vw, calc(84vh * 0.75))"><span id="hudStage">회장님, 한 잔 받으십쇼!</span><span id="hudTry" class="rank"></span></div>
+<div id="wrap">
+  <canvas id="game"></canvas>
+  <div id="overlay"></div>
+</div>
+<div id="hint" style="--w:min(96vw, calc(84vh * 0.75))">누르면 따르고 떼면 멈춤 · 빨간 점선에 딱 맞추면 성공</div>
+
+<script>
+// ===== 기본 설정 =====
+const W = 180, H = 240;
+const cv = document.getElementById('game');
+cv.width = W; cv.height = H;
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const R = (x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const rand = (a, b) => a + Math.random() * (b - a);
+
+const SK = '#f0c19b', SKD = '#d49a72', INK = '#16161d';
+
+// ===== 스테이지 =====
+// shake: 손떨림 진폭(px), freq: 떨림 속도, rate: 초당 차오르는 기본 양(ml), tol: 허용 오차(±ml),
+// jerk: 초당 '움찔' 확률, glug: 콸콸 흐름 변동, sway: 받는 사람 잔 흔들림(px), surge: 초당 '꿀렁' 쏟아짐 확률
+// back: 떼고 병 세우는 속도(낮을수록 막판에 더 흐름), accel: 오래 누를수록 빨라지는 정도, lift: 병을 드는 높이(px), cup: 잔 크기 배율
+// 따르는 사람은 항상 신입사원, 받는 사람(boss)이 스테이지마다 바뀜
+const STAGES = [
+  { rank:'대리', desc:'입사 3일차 신입사원, 첫 회식에서 대리님께 한 잔 올립니다',
+    shake:1.2, freq:3.5, rate:16, tol:2.9, jerk:0.1, glug:0.1, sway:0, surge:0.3, back:6, accel:1, lift:0, cup:1,
+    boss:{ hair:'young', suit:'#1e3a8a', tie:'#dc2626' },
+    clear:'오~ 신입치고 잘 따르네', over:'야야야 넘친다!', under:'에이~ 반 잔이 뭐야' },
+  { rank:'과장', desc:'깐깐한 과장님 잔입니다. 손이 살짝 떨려옵니다',
+    shake:2.6, freq:4.5, rate:19, tol:2.5, jerk:0.3, glug:0.2, sway:1.5, surge:0.8, back:4.5, accel:1.2, lift:3, cup:0.95,
+    boss:{ hair:'side', suit:'#6b4423', tie:'#16a34a', glasses:'thin' },
+    clear:'음, 술 따를 줄 아는구만', over:'자네, 정신 차려!', under:'이걸 마시라고 준 건가?' },
+  { rank:'차장', desc:'무서운 차장님... 땀이 비 오듯 흐릅니다',
+    shake:4, freq:5.5, rate:23, tol:2.2, jerk:0.5, glug:0.3, sway:3, surge:1.3, back:4, accel:1.4, lift:6, cup:0.9,
+    boss:{ hair:'bald', suit:'#374151', tie:'#7c3aed' },
+    clear:'허허, 그 손으로 용케 맞췄네', over:'바지 다 젖었잖아!!', under:'차장 잔이 이게 뭐야~' },
+  { rank:'부장', desc:'부장님은 이미 취하셨다. 잔이 왔다갔다...',
+    shake:5.2, freq:6, rate:26, tol:2.1, jerk:0.7, glug:0.35, sway:4.5, surge:1.8, back:3.5, accel:1.6, lift:9, cup:0.86,
+    boss:{ hair:'side', hc:'#8a8a8a', suit:'#334155', tie:'#f59e0b', glasses:'thin' },
+    clear:'크으~ 우리 신입 최고!', over:'어허! 술이 아깝다!', under:'부장 잔을 반만 채워?' },
+  { rank:'상무', desc:'처음 뵙는 상무님. 올백머리에서 포스가 느껴진다',
+    shake:6.4, freq:7, rate:30, tol:1.8, jerk:0.9, glug:0.4, sway:6, surge:2.3, back:3, accel:1.8, lift:12, cup:0.82,
+    boss:{ hair:'slick', suit:'#0f172a', tie:'#be123c' },
+    clear:'이름이 뭐라고 했지? 기억해두지', over:'...자네 부서가 어디지?', under:'흠. 아쉽군' },
+  { rank:'전무', desc:'전무님 앞에서 숨도 못 쉬겠다',
+    shake:7.6, freq:7.8, rate:33, tol:1.7, jerk:1.0, glug:0.45, sway:7, surge:2.8, back:2.5, accel:2, lift:15, cup:0.78,
+    boss:{ hair:'bald', suit:'#3f3f46', tie:'#0ea5e9', glasses:'thin', mustache:'#777' },
+    clear:'허허허, 패기가 좋아', over:'에헤이~ 이 사람이', under:'전무 잔에 인색하구먼' },
+  { rank:'사장', desc:'사장님 잔이다. 손이 내 손이 아니다',
+    shake:8.8, freq:8.5, rate:37, tol:1.5, jerk:1.2, glug:0.5, sway:8, surge:3.3, back:2.2, accel:2.2, lift:18, cup:0.75,
+    boss:{ hair:'slick', hc:'#9a9a9a', suit:'#1f2937', tie:'#a16207', glasses:'thin' },
+    clear:'자네 같은 인재를 찾고 있었네', over:'허허... 내 양복...', under:'사장한테 이 정도라니' },
+  { rank:'회장', desc:'회장님이 잔을 내미셨다! 손이 덜덜덜덜...',
+    shake:10, freq:9.5, rate:41, tol:1.3, jerk:1.4, glug:0.55, sway:9, surge:3.8, back:1.8, accel:2.5, lift:22, cup:0.72,
+    boss:{ hair:'chair', suit:'#14110f', tie:'#e8b923', glasses:'gold', mustache:'#f2f2f2', brows:'#f2f2f2', old:true, pin:true, pocket:true, ring:true },
+    clear:'캬~ 딱 좋네. 자네 내일부터 내 비서해', over:'허허... 넘쳤네 그려', under:'회장 잔인데 너무 박하구만' },
+];
+
+// 스마트스토어 등 구매 링크. 주소를 넣으면 타이틀/엔딩에 '구매하러 가기' 버튼이 나타남
+const STORE_URL = '';
+
+// 매 판 랜덤 요소
+const TARGET_MIN = 0.3, TARGET_MAX = 0.85; // 점선 높이 (잔 용량 대비 비율)
+const RATE_MIN = 0.7, RATE_MAX = 1.35;     // 따르는 속도 배율 (병마다 남은 양이 달라서)
+const POUR_ACCEL = 0.6;                     // 누르고 있을수록 초당 빨라지는 비율 (스테이지 accel을 곱함)
+
+// ===== 잔 =====
+// 잔 크기는 스테이지마다 다르지만(cup 배율) 가득 차면 항상 50ml. 술 양·목표·허용오차는 모두 ml 단위
+const CUP_ML = 50, GLASS_BOTTOM = 186;
+const G = { cx:100, top:0, h:0, tw:0, bw:0, bot:0, ib:0, ih:0 };
+function setGlass(scale) { // 1 = 기본 소주잔
+  G.h = Math.round(40 * scale); G.tw = Math.round(14 * scale); G.bw = Math.round(11 * scale);
+  G.bot = Math.max(3, Math.round(5 * scale));
+  G.top = GLASS_BOTTOM - G.h; G.ib = GLASS_BOTTOM - G.bot; G.ih = G.ib - G.top;
+}
+setGlass(1);
+const hw = y => G.tw + (G.bw - G.tw) * ((y - G.top) / G.h);
+const mlToY = v => G.ib - v * G.ih / CUP_ML;
+const TABLE_Y = 205;
+
+// ===== 병 스프라이트 (목이 +x 방향) =====
+const bottle = (() => {
+  const c = document.createElement('canvas'); c.width = 40; c.height = 12;
+  const g = c.getContext('2d');
+  const r = (x, y, w, h, col) => { g.fillStyle = col; g.fillRect(x, y, w, h); };
+  r(1, 0, 22, 12, '#1f8a4c'); r(0, 1, 24, 10, '#1f8a4c');
+  r(1, 2, 22, 2, '#49c47a'); r(0, 9, 24, 2, '#146b38');
+  r(24, 2, 3, 8, '#1f8a4c'); r(27, 3, 3, 6, '#1f8a4c'); r(24, 2, 6, 1, '#49c47a');
+  r(30, 4, 10, 4, '#1f8a4c'); r(30, 4, 10, 1, '#49c47a'); r(38, 3, 2, 6, '#2aa35c');
+  r(5, 1, 14, 10, '#f4ecd8'); r(5, 1, 14, 1, '#ffffff'); r(5, 10, 14, 1, '#d8ccb0');
+  r(9, 3, 6, 6, '#d6263a'); r(10, 4, 4, 4, '#ffffff'); r(11, 5, 2, 2, '#1e3a8a');
+  return c;
+})();
+
+// ===== 오디오 =====
+let AC = null;
+function ac() {
+  if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+  if (AC.state === 'suspended') AC.resume();
+  return AC;
+}
+function tone(f, d, type = 'square', v = 0.05, when = 0, slide = 0) {
+  try {
+    const a = ac(), o = a.createOscillator(), g = a.createGain(), t = a.currentTime + when;
+    o.type = type; o.frequency.setValueAtTime(f, t);
+    if (slide) o.frequency.linearRampToValueAtTime(Math.max(40, f + slide), t + d);
+    g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(g).connect(a.destination); o.start(t); o.stop(t + d + 0.02);
+  } catch (e) {}
+}
+const sfx = {
+  pour: lv => tone(240 + lv * 24 + rand(0, 30), 0.045, 'triangle', 0.07),
+  clear: () => [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.14, 'square', 0.05, i * 0.09)),
+  fail: () => { tone(330, 0.18, 'square', 0.05); tone(220, 0.5, 'sawtooth', 0.05, 0.18, -120); },
+  blip: () => tone(880, 0.06, 'square', 0.04),
+  splat: () => tone(120, 0.05, 'triangle', 0.04),
+  glug: () => { tone(160, 0.12, 'square', 0.06, 0, 120); tone(110, 0.1, 'triangle', 0.06, 0.08, 80); },
+};
+
+// ===== 게임 상태 =====
+const S = {
+  state: 'title', stage: 0, tries: 0, totalTries: 0, scores: [], stageTries: [],
+  level: 0, target: 0, holding: false, poured: false, released: false,
+  ang: 215, particles: [], drops: [], settle: 0, outcome: null, mood: 'normal', t: 0,
+  shake: { x:0, y:0, jx:0, jvx:0, jy:0, jvy:0 }, pourSfx: 0,
+};
+const stage = () => STAGES[S.stage];
+
+let roundId = 0;
+function resetRound() {
+  roundId++;
+  Object.assign(S, {
+    level: 0, target: CUP_ML * rand(TARGET_MIN, TARGET_MAX), rateMul: rand(RATE_MIN, RATE_MAX), holdTime: 0, surge: 0, surgeMul: 1, holding: false, poured: false, released: false,
+    ang: 215, particles: [], drops: [], settle: 0, outcome: null, mood: 'normal',
+  });
+  Object.assign(S.shake, { x:0, y:0, jx:0, jvx:0, jy:0, jvy:0 });
+  setGlass(stage().cup);
+  S.backK = stage().back * rand(0.6, 1.4);
+}
+
+// ===== 업데이트 =====
+function updateShake(dt) {
+  const s = stage(), sh = S.shake, t = S.t;
+  const amp = s.shake * (S.holding ? 1 : 0.6);
+  const bx = amp * (0.6 * Math.sin(t * s.freq) + 0.4 * Math.sin(t * s.freq * 2.3 + 1.3));
+  const by = amp * 0.8 * (0.6 * Math.sin(t * s.freq * 1.37 + 0.5) + 0.4 * Math.sin(t * s.freq * 3.1 + 2.1));
+  if (Math.random() < s.jerk * dt) {
+    sh.jvx += rand(-1, 1) * s.shake * 25;
+    sh.jvy += rand(-1, 1) * s.shake * 22;
+  }
+  sh.jvx += (-60 * sh.jx - 6 * sh.jvx) * dt; sh.jx += sh.jvx * dt;
+  sh.jvy += (-60 * sh.jy - 6 * sh.jvy) * dt; sh.jy += sh.jvy * dt;
+  sh.x = bx + sh.jx; sh.y = by + sh.jy;
+  G.cx = 100 + s.sway * (0.7 * Math.sin(t * 1.1) + 0.3 * Math.sin(t * 2.9 + 2));
+}
+
+// lift: 긴장해서 병을 높이 들수록 술줄기가 길어져 떼는 타이밍 잡기 어려움
+function handPos() { return { x: 120 + S.shake.x, y: 93 - stage().lift + S.shake.y }; }
+
+function updatePour(dt) {
+  const s = stage();
+  const targetAng = S.holding ? 150 : 215;
+  // 떼고 나서 병을 세우는 속도: 긴장할수록 느리고 들쭉날쭉 (막판에 더 흘러나옴)
+  S.ang += (targetAng - S.ang) * Math.min(1, dt * (S.holding ? 6 : S.backK));
+  const wobble = s.shake * 0.6 * Math.sin(S.t * s.freq * 1.1);
+  const a = S.ang + wobble;
+  const f = clamp((172 - a) / 22, 0, 1);
+  if (f <= 0) return;
+  if (S.holding) S.holdTime += dt;
+  if (S.surge > 0) S.surge -= dt;
+  else if (Math.random() < s.surge * dt) { S.surge = rand(0.25, 0.45); S.surgeMul = rand(2.2, 3.2); sfx.glug(); }
+  const surgeMul = S.surge > 0 ? S.surgeMul : 1;
+  const accel = 1 + POUR_ACCEL * s.accel * S.holdTime;
+  const flow = f * s.rate * S.rateMul * accel * surgeMul * Math.max(0.2, 1 + s.glug * Math.sin(S.t * 14 + S.rateMul * 5));
+  const H = handPos(), rad = a * Math.PI / 180;
+  const dx = Math.cos(rad), dy = Math.sin(rad);
+  const mx = H.x + dx * 14, my = H.y + dy * 14;
+  const n = 3, vol = flow * dt / n;
+  for (let i = 0; i < n; i++) {
+    S.particles.push({ x: mx + rand(-0.6, 0.6), y: my + rand(-0.5, 0.5),
+      vx: dx * 15 + rand(-1.5, 1.5), vy: dy * 15 + rand(0, 4), vol, inside: false, big: surgeMul > 1 });
+  }
+  S.poured = true;
+}
+
+function splash(x, y, n, col = '#cfeeff') {
+  for (let i = 0; i < n; i++) S.drops.push({ x, y, vx: rand(-25, 25), vy: rand(-50, -15), life: rand(0.2, 0.45), col });
+}
+
+function updateParticles(dt) {
+  const g = 300;
+  for (let i = S.particles.length - 1; i >= 0; i--) {
+    const p = S.particles[i], py0 = p.y;
+    p.vy += g * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+    // 잔 입구 통과 판정
+    if (py0 < G.top && p.y >= G.top) {
+      const d = Math.abs(p.x - G.cx);
+      if (d < G.tw - 1) p.inside = true;
+      else if (d <= G.tw + 1) { splash(p.x, G.top, 1); S.particles.splice(i, 1); continue; }
+    }
+    if (p.inside) {
+      const surf = mlToY(S.level);
+      if (p.y >= surf) {
+        S.level = Math.min(CUP_ML, S.level + p.vol); // 가득 차면 넘쳐흐름
+        if (Math.random() < 0.08) splash(p.x, surf, 1);
+        if (S.t - S.pourSfx > 0.07) { S.pourSfx = S.t; sfx.pour(S.level); }
+        S.particles.splice(i, 1);
+      }
+    } else if (p.y >= TABLE_Y) {
+      if (Math.random() < 0.3) splash(p.x, TABLE_Y, 1);
+      if (Math.random() < 0.05) sfx.splat();
+      S.particles.splice(i, 1);
+    }
+  }
+  for (let i = S.drops.length - 1; i >= 0; i--) {
+    const d = S.drops[i];
+    d.vy += g * dt; d.x += d.vx * dt; d.y += d.vy * dt; d.life -= dt;
+    if (d.life <= 0) S.drops.splice(i, 1);
+  }
+}
+
+function updateJudge(dt) {
+  if (S.outcome) return;
+  const s = stage();
+  if (S.level > S.target + s.tol) { finish('over'); return; }
+  if (S.released && S.particles.length === 0 && S.ang > 190) {
+    S.settle += dt;
+    if (S.settle > 0.35) finish(S.level >= S.target - s.tol ? 'clear' : 'under');
+  }
+}
+
+function finish(kind) {
+  S.outcome = kind; S.holding = false;
+  S.mood = kind === 'clear' ? 'happy' : 'shock';
+  if (kind === 'clear') sfx.clear(); else sfx.fail();
+  const id = roundId;
+  setTimeout(() => { if (id === roundId) showResult(kind); }, 900);
+}
+
+function update(dt) {
+  S.t += dt;
+  if (S.state === 'title') return;
+  updateShake(dt);
+  if (S.state === 'play') updatePour(dt);
+  updateParticles(dt);
+  if (S.state === 'play') updateJudge(dt);
+}
+
+// ===== 그리기 =====
+function frame(x, y, w, h, c) { R(x, y, w, 1, c); R(x, y + h - 1, w, 1, c); R(x, y, 1, h, c); R(x + w - 1, y, 1, h, c); }
+
+function thickLine(x0, y0, x1, y1, r, c) {
+  const len = Math.hypot(x1 - x0, y1 - y0), steps = Math.max(1, Math.ceil(len));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    R(x0 + (x1 - x0) * t - r, y0 + (y1 - y0) * t - r, r * 2, r * 2, c);
+  }
+}
+
+function drawBG() {
+  R(0, 0, W, H, '#2a1b3d');
+  for (let y = 14; y < TABLE_Y; y += 8) R(0, y, W, 1, '#2f2045');
+  // 포차 천막
+  for (let x = 0; x < W; x += 12) { R(x, 0, 6, 11, '#e8742a'); R(x + 6, 0, 6, 11, '#c9541a'); R(x + 1, 11, 10, 2, x % 24 ? '#c9541a' : '#e8742a'); }
+  R(0, 13, W, 1, '#1a1026');
+  // 메뉴판
+  R(6, 26, 46, 58, '#3b2a1e'); frame(6, 26, 46, 58, '#1a1026'); R(8, 28, 42, 54, '#4a3526');
+  R(12, 32, 34, 4, '#ffcf3f');
+  for (let i = 0; i < 5; i++) { R(12, 42 + i * 8, 18, 2, '#f4ecd8'); R(36, 42 + i * 8, 10, 2, '#e8742a'); }
+  // 전구
+  R(90, 13, 1, 14, '#111');
+  ctx.fillStyle = 'rgba(255,220,120,0.07)';
+  ctx.beginPath(); ctx.arc(90, 30, 34, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(90, 30, 18, 0, Math.PI * 2); ctx.fill();
+  R(87, 26, 7, 7, '#ffe9a0'); R(88, 27, 3, 2, '#ffffff'); R(88, 25, 5, 2, '#888');
+  // 테이블
+  R(0, TABLE_Y, W, H - TABLE_Y, '#7a4a2a'); R(0, TABLE_Y, W, 3, '#a0663a');
+  for (let x = 4; x < W; x += 22) R(x, TABLE_Y + 10, 12, 1, '#6a3e22');
+  // 테이블 위 소품: 빈 병, 안주 접시
+  R(160, 172, 10, 33, '#1f8a4c'); R(163, 162, 4, 10, '#1f8a4c'); R(161, 176, 2, 24, '#49c47a'); R(160, 184, 10, 9, '#f4ecd8'); R(163, 186, 4, 4, '#d6263a');
+  R(120, 200, 34, 5, '#e8e8e8'); R(122, 199, 30, 1, '#ffffff');
+  R(126, 195, 8, 5, '#c0392b'); R(134, 196, 7, 4, '#e67e22'); R(141, 195, 8, 5, '#c0392b');
+}
+
+function drawBossHair(b) {
+  if (b.hair === 'neat') { // 단정한 짧은 흑발
+    R(21, 126, 36, 9, INK); R(24, 124, 30, 3, INK); R(19, 131, 4, 18, INK); R(55, 131, 4, 15, INK);
+    R(23, 134, 22, 4, INK); R(45, 134, 8, 2, INK); R(23, 138, 6, 2, INK);
+    R(30, 126, 12, 1, '#3a3a48');
+  } else if (b.hair === 'young') { // 볼륨 있는 갈색 머리
+    const C = '#3a2a1e';
+    R(20, 124, 38, 11, C); R(23, 121, 32, 4, C); R(19, 130, 4, 16, C); R(55, 130, 4, 16, C);
+    R(23, 134, 8, 6, C); R(31, 134, 8, 4, C); R(39, 134, 8, 5, C); R(47, 134, 6, 3, C);
+    R(28, 122, 14, 1, '#5a4430');
+  } else if (b.hair === 'side') { // 2:8 가르마
+    const C = b.hc || '#222';
+    R(21, 126, 36, 8, C); R(24, 124, 30, 3, C); R(19, 131, 4, 14, C); R(55, 131, 4, 12, C);
+    R(31, 134, 24, 3, C); R(29, 124, 1, 10, '#555');
+  } else if (b.hair === 'bald') { // 대머리 + 옆머리
+    R(24, 130, 30, 3, SK); R(27, 128, 24, 2, SK);
+    R(19, 140, 4, 12, '#777'); R(55, 140, 4, 12, '#777'); R(21, 136, 3, 6, '#777'); R(54, 136, 3, 6, '#777');
+    R(32, 131, 7, 2, '#fff4e0');
+  } else if (b.hair === 'slick') { // 올백
+    const C = b.hc || '#111';
+    R(21, 125, 36, 9, C); R(24, 122, 30, 4, C); R(19, 130, 4, 14, C); R(55, 130, 4, 14, C);
+    R(23, 133, 32, 2, C); R(28, 124, 1, 9, 'rgba(255,255,255,.25)'); R(36, 123, 1, 10, 'rgba(255,255,255,.25)'); R(44, 124, 1, 9, 'rgba(255,255,255,.25)');
+  } else if (b.hair === 'chair') { // 회장님: 풍성한 백발 올백
+    const C = '#eeeeee', D = '#c8c8c8';
+    R(20, 122, 38, 12, C); R(23, 118, 32, 5, C); R(27, 116, 24, 3, C);
+    R(18, 128, 5, 22, C); R(55, 128, 5, 22, C); R(23, 133, 32, 2, C);
+    for (let x = 25; x < 55; x += 6) R(x, 119, 1, 13, D);
+    R(18, 146, 5, 4, D); R(55, 146, 5, 4, D);
+  }
+}
+
+function drawBossGlasses(b) {
+  if (b.glasses === 'horn') { // 검은 뿔테
+    ctx.fillStyle = 'rgba(190,225,255,0.28)'; ctx.fillRect(25, 152, 10, 7); ctx.fillRect(42, 152, 10, 7);
+    frame(24, 151, 12, 9, '#0b0b10'); frame(41, 151, 12, 9, '#0b0b10');
+    R(24, 151, 12, 2, '#0b0b10'); R(41, 151, 12, 2, '#0b0b10');
+    R(36, 153, 5, 1, '#0b0b10'); R(21, 153, 3, 1, '#0b0b10'); R(53, 153, 3, 1, '#0b0b10');
+    R(26, 154, 2, 1, 'rgba(255,255,255,.7)'); R(43, 154, 2, 1, 'rgba(255,255,255,.7)');
+  } else if (b.glasses === 'gold') { // 금테
+    ctx.fillStyle = 'rgba(255,240,200,0.18)'; ctx.fillRect(25, 152, 10, 7); ctx.fillRect(42, 152, 10, 7);
+    frame(24, 151, 12, 9, '#d4a017'); frame(41, 151, 12, 9, '#d4a017'); R(24, 151, 12, 1, '#ffd84d'); R(41, 151, 12, 1, '#ffd84d');
+    R(36, 153, 5, 1, '#d4a017'); R(20, 153, 4, 1, '#d4a017'); R(53, 153, 4, 1, '#d4a017');
+    R(26, 154, 2, 1, 'rgba(255,255,255,.7)'); R(43, 154, 2, 1, 'rgba(255,255,255,.7)');
+  } else if (b.glasses === 'thin') { // 은테
+    frame(25, 152, 10, 7, '#b8bcc6'); frame(42, 152, 10, 7, '#b8bcc6');
+    R(35, 154, 7, 1, '#b8bcc6'); R(21, 154, 4, 1, '#b8bcc6'); R(52, 154, 4, 1, '#b8bcc6');
+  }
+}
+
+function drawHolder() {
+  const b = (S.state === 'title' ? STAGES[STAGES.length - 1] : stage()).boss, JK = b.suit, JKD = 'rgba(0,0,0,0.35)', m = S.mood;
+  // 몸
+  R(4, 196, 74, 44, JK); R(8, 192, 66, 6, JK); R(14, 189, 54, 4, JK);
+  R(30, 189, 18, 20, '#f4f4f4'); R(28, 189, 3, 24, JKD); R(47, 189, 3, 24, JKD);
+  R(36, 191, 6, 3, b.tie); R(37, 194, 4, 15, b.tie);
+  if (b.pin) { R(52, 195, 3, 3, '#ffcf3f'); R(53, 196, 1, 1, '#d6263a'); } // 배지
+  if (b.pocket) { R(14, 204, 10, 2, '#ffcf3f'); R(15, 202, 3, 2, '#ffcf3f'); R(20, 202, 3, 2, '#ffe680'); } // 포켓치프
+  if (b.old) { R(28, 189, 3, 24, '#3a2a10'); R(47, 189, 3, 24, '#3a2a10'); R(30, 206, 2, 2, '#d4a017'); R(30, 214, 2, 2, '#d4a017'); } // 금단추 + 라펠
+  // 목
+  R(31, 174, 16, 18, SKD); R(31, 174, 16, 8, SK);
+  // 귀
+  R(17, 150, 5, 10, SK); R(56, 150, 5, 10, SK); R(18, 152, 2, 6, SKD); R(58, 152, 2, 6, SKD);
+  // 머리
+  R(22, 132, 34, 40, SK); R(24, 172, 30, 4, SK); R(28, 176, 22, 2, SK);
+  R(22, 164, 3, 8, SKD); R(53, 164, 3, 8, SKD);
+  drawBossHair(b);
+  // 눈썹
+  const BR = b.brows || (b.hair === 'bald' ? '#666' : INK);
+  if (b.hair === 'bald') { R(25, 145, 10, 2, BR); R(42, 147, 10, 2, BR); } // 한쪽 치켜든 눈썹
+  else if (b.old) { R(24, 145, 12, 3, BR); R(41, 145, 12, 3, BR); R(23, 147, 2, 1, BR); R(53, 147, 2, 1, BR); } // 숱 많은 흰 눈썹
+  else { R(25, 146, 10, 2, BR); R(42, 146, 10, 2, BR); }
+  // 눈
+  if (m === 'happy') {
+    R(27, 156, 2, 1, INK); R(29, 155, 3, 1, INK); R(32, 156, 2, 1, INK);
+    R(44, 156, 2, 1, INK); R(46, 155, 3, 1, INK); R(49, 156, 2, 1, INK);
+  } else if (m === 'shock') {
+    R(28, 153, 5, 5, '#fff'); R(29, 154, 3, 3, INK); R(45, 153, 5, 5, '#fff'); R(46, 154, 3, 3, INK);
+  } else {
+    R(29, 154, 3, 3, INK); R(46, 154, 3, 3, INK); R(30, 154, 1, 1, '#fff'); R(47, 154, 1, 1, '#fff');
+  }
+  drawBossGlasses(b);
+  // 코
+  R(38, 159, 2, 6, SKD); R(36, 164, 5, 1, SKD);
+  if (b.old) { // 주름, 팔자주름
+    R(30, 141, 18, 1, SKD); R(32, 143, 14, 1, SKD);
+    R(31, 162, 1, 6, SKD); R(46, 162, 1, 6, SKD); R(24, 160, 2, 1, SKD); R(52, 160, 2, 1, SKD);
+  }
+  // 입
+  if (m === 'happy') { R(33, 168, 12, 4, '#7a2e2a'); R(34, 168, 10, 1, '#fff'); }
+  else if (m === 'shock') { R(36, 167, 6, 6, '#5a1a1a'); }
+  else { R(33, 169, 12, 1, '#9b4a3c'); R(32, 168, 1, 1, '#9b4a3c'); R(45, 168, 1, 1, '#9b4a3c'); }
+  if (b.mustache) { R(31, 165, 16, 3, b.mustache); R(29, 167, 4, 2, b.mustache); R(45, 167, 4, 2, b.mustache); R(38, 165, 2, 1, SKD); }
+  // 볼터치 (클리어 시)
+  if (m === 'happy') { R(24, 162, 4, 2, '#f39a8a'); R(50, 162, 4, 2, '#f39a8a'); }
+  // 팔 (잔 쪽으로)
+  const d = Math.round(G.cx - 100);
+  thickLine(66, 204, 86 + d, 190, 5, JK);
+  R(78 + d, 184, 6, 10, '#f4f4f4');
+}
+
+function drawGlass() {
+  for (let y = G.top; y < G.top + G.h; y++) {
+    const w = Math.round(hw(y));
+    if (y < G.ib) {
+      ctx.fillStyle = 'rgba(200,230,255,0.10)'; ctx.fillRect(G.cx - w + 1, y, w * 2 - 2, 1);
+      R(G.cx - w, y, 1, 1, '#d8f0ff'); R(G.cx + w - 1, y, 1, 1, '#9cc7e0');
+    } else R(G.cx - w, y, w * 2, 1, y === G.ib ? '#e8f8ff' : '#b9dcef');
+  }
+  R(G.cx - G.tw, G.top - 1, G.tw * 2, 1, '#ffffff');
+  // 술
+  const surf = Math.round(mlToY(S.level));
+  for (let y = Math.max(surf, G.top - 1); y < G.ib; y++) {
+    const w = Math.round(hw(Math.max(y, G.top)));
+    R(G.cx - w + 1, y, w * 2 - 2, 1, y === surf ? '#eefaff' : (S.outcome === 'over' ? '#ffb3c0' : '#a6d9f3'));
+  }
+  // 넘침 표현
+  if (S.level >= CUP_ML) { R(G.cx - G.tw - 1, G.top - 1, 2, 12, '#a6d9f3'); R(G.cx + G.tw - 1, G.top - 1, 2, 9, '#a6d9f3'); }
+  // 하이라이트
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(Math.round(G.cx - G.tw + 3), G.top + 4, 1, Math.round(G.h * 0.45));
+  // 점선
+  const ty = Math.round(mlToY(S.target)), tw = Math.round(hw(ty));
+  const off = Math.floor(S.t * 8);
+  for (let x = G.cx - tw + 1; x < G.cx + tw - 1; x++) if ((x + off) % 4 < 2) R(x, ty, 1, 1, '#ff3355');
+  R(G.cx - tw - 4, ty - 1, 2, 3, '#ff3355'); R(G.cx - tw - 2, ty, 1, 1, '#ff3355');
+  R(G.cx + tw + 2, ty - 1, 2, 3, '#ff3355'); R(G.cx + tw + 1, ty, 1, 1, '#ff3355');
+}
+
+function drawHolderHand() {
+  // 잔을 감싼 손가락 (잔 흔들림을 따라 움직임)
+  const d = Math.round(G.cx - hw(175)) - 88, b = stage().boss; // 잔 왼쪽 벽에 손가락을 붙임
+  R(80 + d, 178, 12, 12, SK);
+  for (let i = 0; i < 4; i++) { R(86 + d, 168 + i * 4, 10, 3, SK); R(95 + d, 168 + i * 4, 1, 3, SKD); }
+  R(86 + d, 171, 10, 1, SKD); R(86 + d, 175, 10, 1, SKD); R(86 + d, 179, 10, 1, SKD);
+  R(88 + d, 164, 4, 4, SK); R(88 + d, 163, 3, 1, SKD);
+  if (b.ring) { R(86 + d, 176, 4, 3, '#ffcf3f'); R(87 + d, 176, 2, 1, '#fff3a0'); R(90 + d, 177, 2, 1, '#e84393'); }
+}
+
+// 따르는 사람: 항상 신입사원. 받는 사람 직급이 높을수록 땀이 늘고 몸이 같이 떨림
+function drawPourer() {
+  const SUIT = '#6b7280', TIE = '#3b82f6', lv = S.stage;
+  const ox = Math.round(S.shake.x * 0.25), oy = Math.round(S.shake.y * 0.25);
+  const P = (x, y, w, h, c) => R(x + ox, y + oy, w, h, c);
+  // 몸 + 사원증
+  P(132, 56, 48, 60, SUIT); P(136, 51, 44, 6, SUIT);
+  P(148, 50, 12, 16, '#f4f4f4'); P(152, 52, 4, 18, TIE); P(151, 51, 6, 3, TIE);
+  P(146, 50, 1, 22, TIE); P(161, 50, 1, 22, TIE);
+  P(146, 72, 16, 10, '#fff'); P(148, 74, 5, 6, '#9ca3af'); P(155, 75, 5, 1, '#333'); P(155, 78, 4, 1, '#333');
+  // 목, 머리 (긴장할수록 창백해짐)
+  const face = ['#f0c19b', '#ecc0a4', '#e6c3b0', '#dccabf'][Math.min(3, Math.floor(lv / 2))];
+  P(147, 44, 12, 8, SKD);
+  P(140, 14, 26, 32, face); P(142, 46, 22, 3, face); P(166, 26, 3, 8, face);
+  // 머리카락
+  P(138, 10, 30, 8, INK); P(138, 14, 4, 12, INK); P(162, 14, 6, 14, INK); P(141, 18, 16, 3, INK);
+  // 팔자 눈썹 + 긴장한 눈
+  P(144, 24, 2, 1, INK); P(146, 23, 3, 1, INK); P(154, 23, 3, 1, INK); P(157, 24, 2, 1, INK);
+  if (S.mood === 'shock') { P(144, 27, 5, 5, '#fff'); P(145, 29, 2, 2, INK); P(154, 27, 5, 5, '#fff'); P(155, 29, 2, 2, INK); }
+  else if (S.mood === 'happy') { P(145, 29, 4, 1, INK); P(155, 29, 4, 1, INK); }
+  else { P(144, 27, 5, 4, '#fff'); P(145, 29, 2, 2, INK); P(154, 27, 5, 4, '#fff'); P(155, 29, 2, 2, INK); }
+  P(141, 32, 2, 5, SKD);
+  // 입: 평소엔 덜덜 떨리는 물결, 클리어하면 안도의 미소
+  if (S.mood === 'happy') { P(146, 40, 8, 1, '#8a3a30'); P(145, 39, 1, 1, '#8a3a30'); P(154, 39, 1, 1, '#8a3a30'); }
+  else { const k = Math.floor(S.t * 12) % 2; for (let i = 0; i < 8; i++) P(146 + i, 40 + ((i + k) % 2), 1, 1, '#8a3a30'); }
+  // 볼 홍조 (회장 스테이지)
+  if (lv >= 5) { P(143, 35, 3, 1, '#f39a8a'); P(158, 35, 3, 1, '#f39a8a'); }
+  // 땀 삐질삐질: 직급이 높을수록 더 많이
+  const n = 2 + Math.round(lv * 1.5);
+  for (let i = 0; i < n; i++) {
+    const side = i % 2, ph = (S.t * (1.2 + lv * 0.3) + i * 0.37) % 1;
+    const x = side ? 167 + (i % 3) * 2 : 136 - (i % 3) * 2;
+    const y = 14 + (i * 5) % 18 + ph * 22;
+    P(x, y, 2, 3, '#7fd3ff'); P(x, y - 1, 1, 1, '#bfe8ff');
+  }
+  if (lv >= 2) { P(150, 15, 2, 3, '#7fd3ff'); P(157, 17, 2, 3, '#7fd3ff'); }
+  // 팔 + 병 + 손
+  const Hd = handPos(), hx = Math.round(Hd.x), hy = Math.round(Hd.y);
+  thickLine(140 + ox, 64 + oy, hx + 4, hy - 1, 4, SUIT);
+  R(hx + 3, hy - 5, 4, 9, '#f4f4f4');
+  ctx.save(); ctx.translate(hx, hy); ctx.rotate(S.ang * Math.PI / 180);
+  ctx.drawImage(bottle, -26, -6); ctx.restore();
+  R(hx - 4, hy - 4, 8, 9, face); R(hx - 4, hy - 1, 8, 1, SKD); R(hx - 4, hy + 2, 8, 1, SKD); R(hx - 5, hy - 3, 1, 6, SKD);
+  // 다른 손으로 병 받치기 (공손하게 두 손으로)
+  R(hx + 8, hy - 12, 6, 6, face); R(hx + 8, hy - 9, 6, 1, SKD);
+}
+
+function draw() {
+  drawBG();
+  drawHolder();
+  drawGlass();
+  drawHolderHand();
+  if (S.state !== 'title') drawPourer();
+  drawLiquidFx();
+}
+
+function drawLiquidFx() {
+  for (const p of S.particles) R(p.x - (p.big ? 1 : 0), p.y, p.big ? 3 : 1, 2, '#cfeeff');
+  for (const d of S.drops) R(d.x, d.y, 1, 1, d.col);
+}
+
+// ===== UI =====
+const ov = document.getElementById('overlay');
+const hudStage = document.getElementById('hudStage'), hudTry = document.getElementById('hudTry');
+let primaryAction = null;
+
+// 첫 번째 버튼(또는 스페이스)이 action, data-act 버튼은 extra[이름]을 실행
+function overlay(html, action, extra = {}, cls = '') {
+  ov.innerHTML = html; ov.className = cls; primaryAction = action;
+  ov.querySelectorAll('button').forEach((btn, i) => {
+    const fn = btn.dataset.act ? extra[btn.dataset.act] : i === 0 ? action : null;
+    if (fn) btn.onclick = e => { e.stopPropagation(); sfx.blip(); fn(); };
+  });
+}
+const storeButton = () => STORE_URL ? `<button data-act="store" class="sub">소주 사러 가기</button>` : '';
+const openStore = () => window.open(STORE_URL, '_blank', 'noopener');
+function hideOverlay() { ov.className = 'hidden'; primaryAction = null; }
+const ml = v => Math.max(0, v).toFixed(1);
+function pourReport() {
+  return `목표 ${ml(S.target)}ml (±${ml(stage().tol)}ml) · 따른 양 ${ml(S.level)}ml`;
+}
+function stars(n) { return '★'.repeat(n) + '☆'.repeat(STAGES.length - n); }
+function updateHud() {
+  const s = stage();
+  hudStage.innerHTML = `STAGE ${S.stage + 1}/${STAGES.length} · <span class="rank">${s.rank}</span>님 잔`;
+  hudTry.textContent = `시도 ${S.tries}`;
+}
+
+function showTitle() {
+  S.state = 'title'; S.stage = 0; S.totalTries = 0; S.scores = []; S.stageTries = [];
+  resetRound(); S.target = CUP_ML * 0.7;
+  hudStage.textContent = '회장님, 한 잔 받으십쇼!'; hudTry.textContent = '';
+  overlay(`
+    <div class="big">회장님,<br>한 잔 받으십쇼!</div>
+    <div class="mid">점선까지 딱! 맞춰 따르면 클리어</div>
+    <div class="small">신입사원이 되어 윗분들께 술을 올리자<br>대리부터 회장님까지 8단계<br>직급이 높을수록 손이 덜덜, 땀이 삐질삐질<br>점선을 넘기면 <span class="red">OUT</span>, 모자라도 실패!</div>
+    <button>시작하기</button>
+    ${storeButton()}
+    <div class="small blink">PRESS SPACE</div>`, () => showIntro(), { store: openStore });
+}
+
+function showIntro() {
+  S.state = 'intro'; resetRound(); updateHud();
+  const s = stage();
+  overlay(`
+    <div class="small">STAGE ${S.stage + 1}</div>
+    <div class="big">${s.rank}님</div>
+    <div class="quote">${s.desc}</div>
+    <div class="small">긴장도 <span class="stars">${stars(S.stage + 1)}</span></div>
+    <button>한 잔 올리겠습니다!</button>`, () => startPlay());
+}
+
+function startPlay() { S.state = 'play'; S.tries++; S.totalTries++; updateHud(); hideOverlay(); }
+
+function showResult(kind) {
+  S.state = 'result';
+  const s = stage();
+  if (kind === 'clear') {
+    const acc = Math.round(clamp(100 - Math.abs(S.level - S.target) / s.tol * 50, 50, 100));
+    S.scores[S.stage] = acc; S.stageTries[S.stage] = S.tries;
+    const grade = acc >= 90 ? '완벽!' : acc >= 70 ? '굿!' : '턱걸이~';
+    const last = S.stage === STAGES.length - 1;
+    overlay(`
+      <div class="big green">CLEAR!</div>
+      <div class="mid">정확도 ${acc}% · ${grade}</div>
+      <div class="small">${pourReport()}</div>
+      <div class="quote">${s.rank}님: "${s.clear}"</div>
+      <button>${last ? '엔딩 보기' : '다음 직급으로'}</button>`,
+      () => { if (last) showEnding(); else { S.stage++; S.tries = 0; showIntro(); } });
+  } else {
+    const over = kind === 'over';
+    overlay(`
+      <div class="big red">${over ? 'OUT!' : '모자라!'}</div>
+      <div class="small">${pourReport()}<br><span class="${over ? 'red' : 'accent'}">${over ? '허용 범위보다 ' + ml(S.level - S.target - s.tol) + 'ml 더 따랐어요' : '허용 범위까지 ' + ml(S.target - s.tol - S.level) + 'ml 모자라요'}</span></div>
+      <div class="quote">${s.rank}님: "${over ? s.over : s.under}"</div>
+      <div class="small">신입사원: ${over ? '죄, 죄송합니다...!!' : '아 제가 너무 긴장해서...'}</div>
+      <button>다시 따르기</button>`, () => { resetRound(); startPlay(); });
+  }
+}
+
+function showEnding() {
+  S.state = 'ending'; S.mood = 'happy';
+  const avg = Math.round(S.scores.reduce((a, b) => a + b, 0) / S.scores.length);
+  const rows = STAGES.map((s, i) => `<span style="white-space:nowrap">${s.rank} ${S.scores[i]}%</span>`).join(' · ');
+  hudStage.textContent = 'ALL CLEAR'; hudTry.textContent = `총 시도 ${S.totalTries}`;
+  overlay(`
+    <div class="big">ALL CLEAR</div>
+    <div class="mid">회장님 잔까지 완벽하게! 정규직 확정!</div>
+    <div class="small">${rows}<br>평균 정확도 ${avg}% · 총 ${S.totalTries}번 시도</div>
+    <div class="quote">회장님: "자네가 따라준 술이 오늘 제일 달았네. 이번엔 내 잔 받게!"</div>
+    <div class="btns"><button data-act="save" class="sub">이미지 저장</button><button data-act="share" class="sub">기록 공유</button></div>
+    ${storeButton()}
+    <button data-act="restart">처음부터</button>
+    <div class="small" id="toast"></div>`, () => showTitle(),
+    { save: saveCard, share: shareRecord, store: openStore, restart: showTitle });
+}
+
+// ===== 기록 카드 이미지 / 공유 =====
+function shareText() {
+  const avg = Math.round(S.scores.reduce((a, b) => a + b, 0) / S.scores.length);
+  return `[회장님, 한 잔 받으십쇼!] 신입사원으로 회장님 잔까지 ALL CLEAR!\n총 ${S.totalTries}번 시도 · 평균 정확도 ${avg}%\n나는 몇 번 만에 깰 수 있을까?`;
+}
+
+function makeCard() {
+  const c = document.createElement('canvas'); c.width = 600; c.height = 960;
+  const g = c.getContext('2d'); g.imageSmoothingEnabled = false;
+  const F = (px) => `${px}px Galmuri11, Galmuri9, monospace`;
+  g.fillStyle = '#120c1c'; g.fillRect(0, 0, 600, 960);
+  g.fillStyle = '#4b3566'; g.fillRect(12, 12, 576, 936); g.fillStyle = '#1a1026'; g.fillRect(20, 20, 560, 920);
+  g.textAlign = 'center';
+  g.fillStyle = '#000'; g.font = F(40); g.fillText('회장님, 한 잔 받으십쇼!', 303, 83);
+  g.fillStyle = '#ffcf3f'; g.fillText('회장님, 한 잔 받으십쇼!', 300, 80);
+  g.fillStyle = '#3fd27a'; g.font = F(28); g.fillText('★ ALL CLEAR ★', 300, 124);
+  g.drawImage(cv, 0, 0, 180, 240, 120, 146, 360, 480);
+  g.strokeStyle = '#000'; g.lineWidth = 4; g.strokeRect(118, 144, 364, 484);
+  const avg = Math.round(S.scores.reduce((a, b) => a + b, 0) / S.scores.length);
+  g.fillStyle = '#fff6e0'; g.font = F(30);
+  g.fillText(`총 ${S.totalTries}번 시도 · 평균 ${avg}%`, 300, 680);
+  g.font = F(18);
+  STAGES.forEach((s, i) => {
+    const x = 120 + (i % 4) * 120, y = 730 + Math.floor(i / 4) * 64;
+    g.fillStyle = '#ffcf3f'; g.fillText(s.rank, x, y);
+    g.fillStyle = '#fff6e0'; g.fillText(`${S.stageTries[i] || '-'}회 · ${S.scores[i]}%`, x, y + 26);
+  });
+  g.fillStyle = 'rgba(255,246,224,.6)'; g.font = F(18);
+  g.fillText('회장님: "자네가 따라준 술이 오늘 제일 달았네.', 300, 884);
+  g.fillText('이번엔 내 잔 받게!"', 300, 912);
+  return c;
+}
+
+function toast(msg) { const t = document.getElementById('toast'); if (t) t.textContent = msg; }
+
+function saveCard() {
+  const a = document.createElement('a');
+  a.download = `회장님한잔_${S.totalTries}회.png`;
+  a.href = makeCard().toDataURL('image/png');
+  a.click();
+  toast('이미지를 저장했어요');
+}
+
+async function shareRecord() {
+  const text = shareText(), url = /^https?:/.test(location.href) ? location.href : undefined;
+  try {
+    const blob = await new Promise(r => makeCard().toBlob(r, 'image/png'));
+    const file = new File([blob], 'soju-pour.png', { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text, url }); return; }
+    if (navigator.share) { await navigator.share({ text, url }); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  // 공유 시트가 없는 PC 등: 문구 + 링크를 복사
+  const msg = url ? `${text}\n${url}` : text;
+  if (await copyText(msg)) toast(url ? '기록과 링크를 복사했어요' : '기록을 복사했어요');
+  else toast('복사에 실패했어요. 이미지 저장을 이용해 주세요');
+}
+
+// clipboard API는 https/localhost에서만 동작하므로 execCommand로 한 번 더 시도
+async function copyText(str) {
+  try { await navigator.clipboard.writeText(str); return true; } catch (e) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = str; ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy'); ta.remove(); return ok;
+  } catch (e) { return false; }
+}
+
+// ===== 입력 =====
+function press() {
+  ac();
+  if (S.state !== 'play' || S.released || S.outcome) return;
+  S.holding = true;
+}
+function release() {
+  if (!S.holding) return;
+  S.holding = false;
+  if (S.poured) S.released = true;
+}
+cv.addEventListener('pointerdown', e => { e.preventDefault(); press(); });
+window.addEventListener('pointerup', release);
+window.addEventListener('pointercancel', release);
+window.addEventListener('blur', release);
+window.addEventListener('keydown', e => {
+  if (e.code !== 'Space' && e.code !== 'Enter') return;
+  e.preventDefault();
+  if (e.repeat) return;
+  if (primaryAction) { sfx.blip(); primaryAction(); return; }
+  press();
+});
+window.addEventListener('keyup', e => { if (e.code === 'Space' || e.code === 'Enter') release(); });
+window.addEventListener('contextmenu', e => e.preventDefault());
+
+// ===== 루프 =====
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(1 / 30, (now - last) / 1000); last = now;
+  update(dt); draw();
+  requestAnimationFrame(loop);
+}
+showTitle();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

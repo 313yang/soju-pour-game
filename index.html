@@ -4,6 +4,41 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>회장님, 한 잔 받으십쇼!</title>
+<meta name="description" content="신입사원이 되어 대리부터 회장님까지 술을 올려라! 덜덜 떨리는 손으로 점선에 딱 맞춰 따르는 픽셀아트 소주 따르기 게임.">
+<meta name="keywords" content="소주 따르기, 술 따르기 게임, 회식 게임, 픽셀아트 게임, 웹게임, 회장님 한 잔 받으십쇼">
+<link rel="canonical" href="https://soju-pour.vercel.app/">
+<meta name="theme-color" content="#120c1c">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="회장님, 한 잔 받으십쇼!">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:url" content="https://soju-pour.vercel.app/">
+<meta property="og:title" content="회장님, 한 잔 받으십쇼!">
+<meta property="og:description" content="신입사원이 되어 대리부터 회장님까지 술을 올려라! 점선에 딱 맞추면 클리어, 넘치면 OUT.">
+<meta property="og:image" content="https://soju-pour.vercel.app/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="회장님께 소주를 따르는 신입사원 픽셀아트">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="회장님, 한 잔 받으십쇼!">
+<meta name="twitter:description" content="신입사원이 되어 대리부터 회장님까지 술을 올려라! 점선에 딱 맞추면 클리어, 넘치면 OUT.">
+<meta name="twitter:image" content="https://soju-pour.vercel.app/og-image.png">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="alternate icon" href="/favicon.ico">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"VideoGame","name":"회장님, 한 잔 받으십쇼!","url":"https://soju-pour.vercel.app/","image":"https://soju-pour.vercel.app/og-image.png","description":"신입사원이 되어 대리부터 회장님까지 술을 따르는 픽셀아트 웹게임","genre":"Casual","gamePlatform":"Web browser","inLanguage":"ko","applicationCategory":"Game","operatingSystem":"Any"}
+</script>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-KSBNDD8E0S"></script>
+<script>
+  window.GA_ID = 'G-KSBNDD8E0S'; // 게임 이벤트(track)도 이 ID로 전송
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-KSBNDD8E0S');
+</script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/galmuri/dist/galmuri.css">
 <style>
   :root { --bg:#120c1c; --ink:#fff6e0; --accent:#ffcf3f; --red:#ff3355; --green:#3fd27a; }
@@ -536,7 +571,11 @@ function overlay(html, action, extra = {}, cls = '') {
   });
 }
 const storeButton = () => STORE_URL ? `<button data-act="store" class="sub">소주 사러 가기</button>` : '';
-const openStore = () => window.open(STORE_URL, '_blank', 'noopener');
+const openStore = () => { track('store_click'); window.open(STORE_URL, '_blank', 'noopener'); };
+
+// GA4 이벤트 (GA_ID가 비어 있으면 아무것도 안 보냄)
+function track(name, params = {}) { if (window.GA_ID) gtag('event', name, params); }
+const stageParams = () => ({ stage: S.stage + 1, rank: stage().rank });
 function hideOverlay() { ov.className = 'hidden'; primaryAction = null; }
 const ml = v => Math.max(0, v).toFixed(1);
 function pourReport() {
@@ -573,7 +612,10 @@ function showIntro() {
     <button>한 잔 올리겠습니다!</button>`, () => startPlay());
 }
 
-function startPlay() { S.state = 'play'; S.tries++; S.totalTries++; updateHud(); hideOverlay(); }
+function startPlay() {
+  if (S.totalTries === 0) track('game_start');
+  S.state = 'play'; S.tries++; S.totalTries++; updateHud(); hideOverlay();
+}
 
 function showResult(kind) {
   S.state = 'result';
@@ -581,6 +623,7 @@ function showResult(kind) {
   if (kind === 'clear') {
     const acc = Math.round(clamp(100 - Math.abs(S.level - S.target) / s.tol * 50, 50, 100));
     S.scores[S.stage] = acc; S.stageTries[S.stage] = S.tries;
+    track('stage_clear', { ...stageParams(), tries: S.tries, accuracy: acc });
     const grade = acc >= 90 ? '완벽!' : acc >= 70 ? '굿!' : '턱걸이~';
     const last = S.stage === STAGES.length - 1;
     overlay(`
@@ -592,6 +635,7 @@ function showResult(kind) {
       () => { if (last) showEnding(); else { S.stage++; S.tries = 0; showIntro(); } });
   } else {
     const over = kind === 'over';
+    track('stage_fail', { ...stageParams(), reason: kind, tries: S.tries });
     overlay(`
       <div class="big red">${over ? 'OUT!' : '모자라!'}</div>
       <div class="small">${pourReport()}<br><span class="${over ? 'red' : 'accent'}">${over ? '허용 범위보다 ' + ml(S.level - S.target - s.tol) + 'ml 더 따랐어요' : '허용 범위까지 ' + ml(S.target - s.tol - S.level) + 'ml 모자라요'}</span></div>
@@ -604,6 +648,7 @@ function showResult(kind) {
 function showEnding() {
   S.state = 'ending'; S.mood = 'happy';
   const avg = Math.round(S.scores.reduce((a, b) => a + b, 0) / S.scores.length);
+  track('all_clear', { total_tries: S.totalTries, avg_accuracy: avg });
   const rows = STAGES.map((s, i) => `<span style="white-space:nowrap">${s.rank} ${S.scores[i]}%</span>`).join(' · ');
   hudStage.textContent = 'ALL CLEAR'; hudTry.textContent = `총 시도 ${S.totalTries}`;
   overlay(`
@@ -654,6 +699,7 @@ function makeCard() {
 function toast(msg) { const t = document.getElementById('toast'); if (t) t.textContent = msg; }
 
 function saveCard() {
+  track('save_image', { total_tries: S.totalTries });
   const a = document.createElement('a');
   a.download = `회장님한잔_${S.totalTries}회.png`;
   a.href = makeCard().toDataURL('image/png');
@@ -666,12 +712,12 @@ async function shareRecord() {
   try {
     const blob = await new Promise(r => makeCard().toBlob(r, 'image/png'));
     const file = new File([blob], 'soju-pour.png', { type: 'image/png' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text, url }); return; }
-    if (navigator.share) { await navigator.share({ text, url }); return; }
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], text, url }); track('share', { method: 'share_image' }); return; }
+    if (navigator.share) { await navigator.share({ text, url }); track('share', { method: 'share_text' }); return; }
   } catch (e) { if (e && e.name === 'AbortError') return; }
   // 공유 시트가 없는 PC 등: 문구 + 링크를 복사
   const msg = url ? `${text}\n${url}` : text;
-  if (await copyText(msg)) toast(url ? '기록과 링크를 복사했어요' : '기록을 복사했어요');
+  if (await copyText(msg)) track('share', { method: 'copy' }), toast(url ? '기록과 링크를 복사했어요' : '기록을 복사했어요');
   else toast('복사에 실패했어요. 이미지 저장을 이용해 주세요');
 }
 
